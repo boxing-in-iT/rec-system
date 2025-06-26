@@ -34,28 +34,30 @@ def recommend_by_category(category: str, count: int = 5):
     return {"recommendations": recommender.get_similar_by_category(category, count)}
 
 @app.post("/recommend/personalized")
-def recommend_personalized(interactions: List[InteractionInput], count: int = 5):
+def recommend_personalized(interactions: List[InteractionInput], count: int = 20):
     recommender = get_recommender()
 
-    liked_books = [recommender.clean_text(i.book.description + ' ' + i.book.categories + ' ' + i.book.authors)
+    liked_texts = [' '.join([i.book.description, i.book.categories, i.book.authors])
                    for i in interactions if i.interactionType == 'like']
+    liked_clean = [recommender.clean_text(text) for text in liked_texts]
 
-    if not liked_books:
+    if not liked_clean:
         return {"recommendations": []}
 
-    # Построим вектор предпочтений пользователя
     tfidf = recommender.tfidf
-    user_profile_vector = tfidf.transform([' '.join(liked_books)])
+    liked_vectors = tfidf.transform(liked_clean)
+    user_profile_vector = liked_vectors.mean(axis=0).A  # Преобразуем np.matrix → array
 
-    # Расчёт косинусного сходства между профилем пользователя и книгами
     cosine_sim = cosine_similarity(user_profile_vector, recommender.tfidf_matrix).flatten()
 
-    # Исключим уже взаимодействованные книги
-    interacted_ids = {i.book.id for i in interactions}
-    indices_scores = [(idx, score) for idx, score in enumerate(cosine_sim)
-                      if recommender.df.iloc[idx]['id'] not in interacted_ids]
+    # Надёжная фильтрация: по названию (а не id)
+    interacted_titles = {i.book.title.strip().lower() for i in interactions}
 
-    # Учитываем популярность
+    indices_scores = [
+        (idx, score) for idx, score in enumerate(cosine_sim)
+        if recommender.df.iloc[idx]['title'].strip().lower() not in interacted_titles
+    ]
+
     for i, (idx, score) in enumerate(indices_scores):
         popularity = recommender.df.iloc[idx]['normalized_rating']
         indices_scores[i] = (idx, score * 0.7 + popularity * 0.3)
